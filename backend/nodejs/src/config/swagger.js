@@ -35,12 +35,8 @@ Use **Bearer token** from \`POST /api/auth/login\` response in the Authorization
     },
     servers: [
       {
-        url: process.env.API_BASE_URL || 'https://findata-core.preview.emergentagent.com',
-        description: 'Deployed server',
-      },
-      {
-        url: 'http://localhost:8001',
-        description: 'Local development',
+        url: process.env.API_BASE_URL || 'http://localhost:8001',
+        description: 'API server',
       },
     ],
     components: {

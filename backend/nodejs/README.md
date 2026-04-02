@@ -1,6 +1,6 @@
 # Finance Data Processing & Access Control Backend
 
-A production-ready backend for a finance dashboard system featuring role-based access control, financial records management, and analytics APIs.
+A backend for a finance dashboard system featuring role-based access control, financial records management, and analytics APIs.
 
 ## Tech Stack
 
@@ -11,25 +11,39 @@ A production-ready backend for a finance dashboard system featuring role-based a
 
 ---
 
-## Live API
+## Setup & Run
 
-**Base URL**: `https://findata-core.preview.emergentagent.com`
+```bash
+# 1. Install dependencies
+cd backend/nodejs
+npm install
 
-**Swagger Docs**: `https://findata-core.preview.emergentagent.com/api/docs`
+# 2. Configure environment variables
+cp .env.example .env
+# Edit .env with your values
+
+# 3. Start the server
+node server.js
+```
+
+### Environment Variables
+
+```env
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=finance_db
+JWT_SECRET=your-64-char-secret-here
+JWT_EXPIRES_IN=7d
+NODE_PORT=8001
+```
 
 ---
 
-## Quick Start (Local)
+## Swagger Docs
 
-```bash
-cd backend/nodejs
-npm install
-# Copy .env from /app/backend/.env or set these variables:
-export MONGO_URL=mongodb://localhost:27017
-export DB_NAME=finance_db
-export JWT_SECRET=your-secret-here
-export NODE_PORT=8002
-node server.js
+Once running, visit:
+
+```
+http://localhost:8001/api/docs
 ```
 
 ---
@@ -79,7 +93,7 @@ Get a token via `POST /api/auth/login`.
 | POST   | /api/auth/register    | Register new user        | No   |
 | POST   | /api/auth/login       | Login (returns JWT)      | No   |
 | GET    | /api/auth/me          | Get current user         | Yes  |
-| POST   | /api/auth/logout      | Logout (discard token)   | Yes  |
+| POST   | /api/auth/logout      | Logout                   | Yes  |
 
 ### Financial Records
 | Method | Path                  | Description                         | Role     |
@@ -90,11 +104,11 @@ Get a token via `POST /api/auth/login`.
 | PUT    | /api/records/:id      | Update record                       | Admin    |
 | DELETE | /api/records/:id      | Soft delete record                  | Admin    |
 
-**Query Filters (GET /api/records)**:
+**Query Filters (`GET /api/records`)**:
 - `type` — `income` or `expense`
 - `category` — partial match (case-insensitive)
 - `startDate` / `endDate` — date range (`YYYY-MM-DD`)
-- `search` — full-text search in description/category
+- `search` — searches description and category
 - `page`, `limit` — pagination
 - `sortBy` — `date` | `amount` | `category`
 - `sortOrder` — `asc` | `desc`
@@ -126,7 +140,7 @@ Get a token via `POST /api/auth/login`.
 {
   "_id": "ObjectId",
   "name": "string",
-  "email": "string (unique)",
+  "email": "string (unique, lowercase)",
   "role": "viewer | analyst | admin",
   "isActive": true,
   "createdAt": "ISO date",
@@ -143,7 +157,7 @@ Get a token via `POST /api/auth/login`.
   "category": "Salary",
   "date": "ISO date",
   "description": "Monthly salary",
-  "createdBy": "User ObjectId",
+  "createdBy": "User ObjectId (ref)",
   "isDeleted": false,
   "createdAt": "ISO date",
   "updatedAt": "ISO date"
@@ -152,41 +166,38 @@ Get a token via `POST /api/auth/login`.
 
 ---
 
-## Architecture
+## Project Structure
 
 ```
-backend/nodejs/
-├── server.js               # Express app entry point, Swagger, seed
+nodejs/
+├── server.js               # Express app entry point, Swagger setup, DB seed
 └── src/
     ├── config/
-    │   ├── db.js           # MongoDB connection
-    │   ├── swagger.js      # OpenAPI spec config
-    │   └── seed.js         # Initial data seeding
+    │   ├── db.js           # MongoDB connection (Mongoose)
+    │   ├── swagger.js      # OpenAPI 3.0 spec configuration
+    │   └── seed.js         # Initial data seeding (users + records)
     ├── middleware/
-    │   ├── auth.js         # JWT verify middleware
+    │   ├── auth.js         # JWT verification middleware
     │   └── roles.js        # Role-based access control factory
     ├── models/
-    │   ├── User.js         # Mongoose User model
-    │   └── Record.js       # Mongoose Financial Record model
+    │   ├── User.js         # Mongoose User schema + bcrypt hooks
+    │   └── Record.js       # Mongoose Financial Record schema (soft delete)
     └── routes/
-        ├── auth.js         # Auth routes
-        ├── users.js        # User management routes
+        ├── auth.js         # Authentication routes
+        ├── users.js        # User management routes (admin)
         ├── records.js      # Financial record CRUD routes
-        └── dashboard.js    # Analytics/summary routes
+        └── dashboard.js    # Analytics / summary routes
 ```
-
-The project runs inside a platform that uses Python/uvicorn as a gateway on port 8001. The Node.js Express server runs on port 8002, and Python forwards all requests to it via an HTTP proxy.
 
 ---
 
 ## Design Decisions & Assumptions
 
-1. **JWT Bearer tokens** (not cookies) — more appropriate for a pure API backend consumed by any frontend.
-2. **Soft delete** — records are marked `isDeleted: true` rather than physically removed, preserving audit history. A Mongoose query pre-hook automatically filters them out from normal queries.
-3. **Role hierarchy** — Viewer (read-only + basic dashboard), Analyst (all reads + advanced analytics), Admin (full CRUD + user management). The distinction between Viewer and Analyst is primarily at the dashboard level — analysts get trend and category breakdown insights.
-4. **Seed data** — on startup, three users (one per role) and 37 financial records spanning 6 months are seeded if the DB is empty. This makes the dashboard analytics immediately meaningful.
-5. **Input validation** — `express-validator` validates all request bodies; MongoDB schema validators serve as a second layer.
-6. **Pagination** — all list endpoints support `page`/`limit` query params.
-7. **Search** — records endpoint supports full-text search across description and category.
-8. **Category aggregation** — the dashboard computes both income and expense totals per category in a single aggregation pipeline pass.
-9. **Monthly trends** — computed via MongoDB `$group` on `$year`/`$month` of the record date; defaults to last 6 months.
+1. **JWT Bearer tokens** (not cookies) — stateless, suitable for any client (web, mobile, CLI).
+2. **Soft delete** — records are marked `isDeleted: true` rather than physically removed, preserving audit history. A Mongoose query pre-hook automatically filters deleted records from all normal queries.
+3. **Role hierarchy** — Viewer gets read access + basic dashboard; Analyst gets all reads + advanced analytics (trends, categories); Admin gets full CRUD + user management.
+4. **Seed data** — on first startup, 3 users (one per role) and 37 financial records spanning 6 months are created automatically. Subsequent restarts are idempotent.
+5. **Dual validation** — `express-validator` validates request bodies at the route level; Mongoose schema validators act as a second layer for data integrity.
+6. **Category aggregation** — dashboard categories endpoint computes both income and expense totals per category in a single MongoDB aggregation pipeline pass.
+7. **Monthly trends** — grouped via MongoDB `$year`/`$month` operators on the record date; configurable number of past months via `?months=N` query param.
+8. **Status toggle** — `PATCH /api/users/:id/status` accepts optional `isActive` boolean; if omitted, it toggles the current value.
