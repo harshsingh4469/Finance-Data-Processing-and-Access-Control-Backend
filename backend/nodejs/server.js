@@ -1,4 +1,6 @@
+// Load .env if present locally — on production (Render) env vars are injected by the host
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const express = require('express');
 const cors = require('cors');
