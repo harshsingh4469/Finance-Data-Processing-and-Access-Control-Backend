@@ -1,5 +1,17 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+# Platform internal folders — do not commit
+.emergent/
+memory/
+test_reports/
+tests/
+frontend/
+
+# Platform generated files
+test_result.md
+yarn.lock
+.gitconfig
+
 # IDE and editors
 .idea/
 .vscode/
