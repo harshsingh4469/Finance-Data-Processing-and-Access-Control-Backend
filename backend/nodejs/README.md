@@ -1,113 +1,190 @@
 # FinanceAPI — Data Processing & Access Control Backend
 
-A structured, role-based backend system for managing financial records and serving dashboard-level analytics. Built as a clean demonstration of backend architecture, access control logic, and data modeling using Node.js, Express, and MongoDB.
+> A role-based backend system built to manage financial records, enforce access policies, and serve dashboard-level analytics. Designed with clean separation of concerns, layered validation, and a clear mental model for how data flows through the system.
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
+- [Why I Built It This Way](#why-i-built-it-this-way)
 - [Tech Stack](#tech-stack)
+- [System Architecture](#system-architecture)
 - [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
+- [Getting Started Locally](#getting-started-locally)
 - [Environment Variables](#environment-variables)
-- [Authentication](#authentication)
+- [Live Deployment](#live-deployment)
+- [Authentication Flow](#authentication-flow)
 - [Roles & Permissions](#roles--permissions)
 - [API Reference](#api-reference)
 - [Data Models](#data-models)
 - [Access Control Design](#access-control-design)
 - [Error Handling](#error-handling)
 - [Seed Data](#seed-data)
-- [Design Decisions](#design-decisions)
+- [Design Decisions & Tradeoffs](#design-decisions--tradeoffs)
 
 ---
 
-## Overview
+## Why I Built It This Way
 
-FinanceAPI is a backend service designed to support a multi-role finance dashboard. It handles:
+When I approached this problem, the first question I asked was — *who is actually using this system, and what do they need?*
 
-- **User management** with role-based access (viewer, analyst, admin)
-- **Financial record CRUD** — income and expense entries with filtering, search, and pagination
-- **Dashboard analytics** — aggregated summaries, category breakdowns, and monthly trends
-- **JWT-based authentication** with middleware-level access enforcement
+Three distinct users emerged: a **viewer** who just needs to check numbers, an **analyst** who needs to dig deeper into trends and breakdowns, and an **admin** who manages the whole system. That single observation shaped every routing decision, every middleware choice, and every API response structure in this codebase.
 
-The API is fully documented via Swagger UI and follows RESTful conventions with consistent error responses and input validation at every layer.
+Rather than bolting on access control as an afterthought, I made it a first-class concern from the start — a composable `requireRole()` middleware that reads naturally at the route level and fails loudly when misused.
 
 ---
 
 ## Tech Stack
 
-| Layer          | Technology                        |
-|----------------|-----------------------------------|
-| Runtime        | Node.js v20                       |
-| Framework      | Express.js                        |
-| Database       | MongoDB                           |
-| ODM            | Mongoose                          |
-| Auth           | JWT (jsonwebtoken + bcryptjs)     |
-| Validation     | express-validator                 |
-| Documentation  | swagger-jsdoc + swagger-ui-express|
-| HTTP Logging   | Morgan                            |
+| Layer | Technology | Why |
+|---|---|---|
+| Runtime | Node.js v20 | Non-blocking I/O, great ecosystem for REST APIs |
+| Framework | Express.js | Minimal, battle-tested, easy to reason about |
+| Database | MongoDB | Flexible schema suits evolving financial data |
+| ODM | Mongoose | Schema enforcement + lifecycle hooks at the model level |
+| Auth | JWT + bcryptjs | Stateless tokens — no session store needed |
+| Validation | express-validator | Declarative, per-route validation rules |
+| Docs | Swagger / OpenAPI 3.0 | Auto-generated, always in sync with the code |
+| Logging | Morgan | HTTP request logging out of the box |
+
+---
+
+## System Architecture
+
+```
+                        ┌─────────────────────────────────────┐
+                        │           Client (Browser/App)       │
+                        └──────────────┬──────────────────────┘
+                                       │ HTTPS
+                        ┌──────────────▼──────────────────────┐
+                        │         Express.js Server            │
+                        │                                      │
+                        │   ┌─────────────────────────────┐   │
+                        │   │        Middleware Layer       │   │
+                        │   │  cors → morgan → json body   │   │
+                        │   └──────────────┬──────────────┘   │
+                        │                  │                   │
+                        │   ┌──────────────▼──────────────┐   │
+                        │   │       Route Layer            │   │
+                        │   │  /api/auth  /api/records     │   │
+                        │   │  /api/users /api/dashboard   │   │
+                        │   └──────────────┬──────────────┘   │
+                        │                  │                   │
+                        │   ┌──────────────▼──────────────┐   │
+                        │   │     Auth Middleware           │   │
+                        │   │  authenticate → requireRole  │   │
+                        │   └──────────────┬──────────────┘   │
+                        │                  │                   │
+                        │   ┌──────────────▼──────────────┐   │
+                        │   │     Controller Logic         │   │
+                        │   │  validate → query → respond  │   │
+                        │   └──────────────┬──────────────┘   │
+                        │                  │                   │
+                        │   ┌──────────────▼──────────────┐   │
+                        │   │       Mongoose ODM            │   │
+                        │   │  Schema hooks → Aggregations │   │
+                        │   └──────────────┬──────────────┘   │
+                        └──────────────────┼──────────────────┘
+                                           │
+                        ┌──────────────────▼──────────────────┐
+                        │           MongoDB Atlas              │
+                        │   users collection                   │
+                        │   records collection                 │
+                        └─────────────────────────────────────┘
+```
+
+### Request Lifecycle
+
+Every incoming request passes through the same predictable pipeline:
+
+```
+Request → CORS → Body Parse → Route Match → authenticate()
+       → requireRole() → express-validator → Controller → MongoDB → Response
+```
+
+If anything fails along the way — expired token, wrong role, invalid input — it short-circuits immediately with a consistent JSON error. No request ever reaches the database with bad data.
+
+### Access Control Model
+
+```
+┌──────────┬────────────────────────────────────────────────────────┐
+│ Role     │ What they can do                                        │
+├──────────┼────────────────────────────────────────────────────────┤
+│ viewer   │ Read records, view summary + recent dashboard           │
+│ analyst  │ Everything viewer can + trends & category breakdowns    │
+│ admin    │ Full CRUD on records + complete user management         │
+└──────────┴────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Project Structure
 
 ```
-nodejs/
-├── server.js                    # App entry point: Express setup, route mounting, Swagger, DB seed
+backend/nodejs/
+│
+├── server.js                    # Entry point — wires everything together
+│
 └── src/
     ├── config/
-    │   ├── db.js                # MongoDB connection via Mongoose
-    │   ├── swagger.js           # OpenAPI 3.0 specification config
-    │   └── seed.js              # Seed users and sample financial records on startup
+    │   ├── db.js                # MongoDB connection (single responsibility)
+    │   ├── swagger.js           # OpenAPI spec — auto-synced with route JSDoc
+    │   └── seed.js              # Idempotent seed — safe to run on every restart
     │
     ├── middleware/
-    │   ├── auth.js              # JWT verification — extracts and validates Bearer token
-    │   └── roles.js             # RBAC factory — requireRole('admin') / requireRole('analyst','admin')
+    │   ├── auth.js              # Verifies JWT, hydrates req.user
+    │   └── roles.js             # requireRole() factory — composable RBAC
     │
     ├── models/
-    │   ├── User.js              # User schema: name, email, password (hashed), role, isActive
-    │   └── Record.js            # Financial record schema: amount, type, category, date, soft delete
+    │   ├── User.js              # bcrypt hook, toJSON strip, role enum
+    │   └── Record.js            # Soft delete hook, compound index
     │
     └── routes/
-        ├── auth.js              # POST /register, POST /login, GET /me, POST /logout
-        ├── users.js             # Admin-only user management CRUD + status toggle
-        ├── records.js           # Financial records CRUD with filters, pagination, search
-        └── dashboard.js         # Summary, category breakdown, monthly trends, recent activity
+        ├── auth.js              # register, login, me, logout
+        ├── users.js             # Admin-only user management
+        ├── records.js           # CRUD + filter + search + pagination
+        └── dashboard.js         # Aggregation pipelines for analytics
 ```
+
+The structure is intentionally flat and obvious. A new engineer should be able to find any piece of logic within 10 seconds.
 
 ---
 
-## Getting Started
+## Getting Started Locally
 
 ### Prerequisites
+- Node.js v18 or above
+- MongoDB running locally **or** a MongoDB Atlas free cluster
 
-- Node.js v18+
-- MongoDB running locally or a connection URI (MongoDB Atlas)
-
-### Installation
+### Clone & Install
 
 ```bash
-# Clone the repository
-git clone <your-repo-url>
-cd nodejs
-
-# Install dependencies
+git clone https://github.com/harshsingh4469/Finance-Data-Processing-and-Access-Control-Backend.git
+cd Finance-Data-Processing-and-Access-Control-Backend/backend/nodejs
 npm install
+```
 
-# Set up environment variables
+### Set Up Environment
+
+Create a `.env` file inside `backend/nodejs/`:
+
+```bash
 cp .env.example .env
-# Edit .env with your values (see Environment Variables section)
+```
 
-# Start the server
+Edit the values — see the [Environment Variables](#environment-variables) section below.
+
+### Run
+
+```bash
 node server.js
 ```
 
-The server starts on `http://localhost:8001` by default.
+Server starts at `http://localhost:8001`
 
-On first run, seed data is automatically inserted: 3 users (one per role) and 37 financial records spanning 6 months.
+On first run, seed data is automatically inserted — 3 users and 37 financial records across 6 months. You can start testing immediately without any manual setup.
 
-### Swagger UI
+### Open Swagger Docs
 
 ```
 http://localhost:8001/api/docs
@@ -117,92 +194,107 @@ http://localhost:8001/api/docs
 
 ## Environment Variables
 
-Create a `.env` file in the root directory:
+Create a `.env` file in `backend/nodejs/` with the following:
 
 ```env
+# MongoDB connection string
+# Local:  mongodb://localhost:27017
+# Atlas:  mongodb+srv://<user>:<password>@<cluster>.mongodb.net/finance_db?retryWrites=true&w=majority
 MONGO_URL=mongodb://localhost:27017
+
+# Database name
 DB_NAME=finance_db
-JWT_SECRET=your-strong-64-char-secret-here
+
+# JWT secret — use a long random string in production (min 32 chars)
+JWT_SECRET=your-super-secret-key-here
+
+# Token expiry
 JWT_EXPIRES_IN=7d
+
+# Port the server listens on
 NODE_PORT=8001
+
+# Your deployed base URL (used by Swagger UI server dropdown)
+# Leave as localhost for local dev, set to your hosted URL in production
+API_BASE_URL=http://localhost:8001
 ```
 
-| Variable       | Description                              | Default               |
-|----------------|------------------------------------------|-----------------------|
-| `MONGO_URL`    | MongoDB connection string                | mongodb://localhost:27017 |
-| `DB_NAME`      | MongoDB database name                    | finance_db            |
-| `JWT_SECRET`   | Secret key for signing JWT tokens        | required              |
-| `JWT_EXPIRES_IN` | Token expiry duration                  | 7d                    |
-| `NODE_PORT`    | Port the server listens on               | 8001                  |
+### For Production Deployment (Render / Railway / etc.)
+
+Set these as environment variables in your hosting dashboard — do **not** commit `.env` to git.
+
+| Variable | Production Value |
+|---|---|
+| `MONGO_URL` | `mongodb+srv://user:pass@cluster.mongodb.net/finance_db?retryWrites=true&w=majority` |
+| `DB_NAME` | `finance_db` |
+| `JWT_SECRET` | any 64-character random string |
+| `JWT_EXPIRES_IN` | `7d` |
+| `NODE_PORT` | `10000` (Render) or `8080` (Railway) |
+| `API_BASE_URL` | `https://your-app.onrender.com` |
+
+> **Note on MongoDB passwords:** If your password contains special characters like `@`, `#`, or `!` — URL-encode them before putting them in the connection string. For example `@` becomes `%40`. Using a password with only letters and numbers avoids this entirely.
 
 ---
 
-## Authentication
+## Live Deployment
 
-The API uses **stateless JWT authentication**. On successful login, a token is returned in the response body. Pass this token in all subsequent requests via the `Authorization` header:
+| | |
+|---|---|
+| **Live API** | https://finance-data-processing-and-access-k9rq.onrender.com |
+| **Swagger Docs** | https://finance-data-processing-and-access-k9rq.onrender.com/api/docs |
+| **Health Check** | https://finance-data-processing-and-access-k9rq.onrender.com/api/health |
+
+> Hosted on Render free tier — first request after inactivity may take ~30 seconds to wake up.
+
+---
+
+## Authentication Flow
+
+This API uses **stateless JWT authentication**. Here is the full flow:
 
 ```
-Authorization: Bearer <your_token_here>
+1. POST /api/auth/login  →  returns { token, user }
+2. Store the token on the client
+3. Send it with every subsequent request:
+   Authorization: Bearer <token>
+4. Server verifies signature + expiry on each request
+5. User object is attached to req.user for all downstream handlers
 ```
 
-### Login
+### Quick Login Test
 
 ```bash
-curl -X POST http://localhost:8001/api/auth/login \
+curl -X POST https://finance-data-processing-and-access-k9rq.onrender.com/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email": "admin@findata.com", "password": "admin123"}'
 ```
 
-**Response:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "_id": "...",
-    "name": "Admin User",
-    "email": "admin@findata.com",
-    "role": "admin",
-    "isActive": true
-  }
-}
-```
+### Seed Credentials
 
-### Default Seed Credentials
-
-| Role     | Email                 | Password     |
-|----------|-----------------------|--------------|
-| Admin    | admin@findata.com     | admin123     |
-| Analyst  | analyst@findata.com   | analyst123   |
-| Viewer   | viewer@findata.com    | viewer123    |
+| Role | Email | Password |
+|---|---|---|
+| Admin | admin@findata.com | admin123 |
+| Analyst | analyst@findata.com | analyst123 |
+| Viewer | viewer@findata.com | viewer123 |
 
 ---
 
 ## Roles & Permissions
 
-The system defines three roles with progressively expanding access:
-
-| Endpoint                        | Viewer | Analyst | Admin |
-|---------------------------------|--------|---------|-------|
-| POST /api/auth/login            | ✅     | ✅      | ✅    |
-| GET /api/auth/me                | ✅     | ✅      | ✅    |
-| GET /api/records                | ✅     | ✅      | ✅    |
-| GET /api/records/:id            | ✅     | ✅      | ✅    |
-| POST /api/records               | ❌     | ❌      | ✅    |
-| PUT /api/records/:id            | ❌     | ❌      | ✅    |
-| DELETE /api/records/:id         | ❌     | ❌      | ✅    |
-| GET /api/dashboard/summary      | ✅     | ✅      | ✅    |
-| GET /api/dashboard/recent       | ✅     | ✅      | ✅    |
-| GET /api/dashboard/categories   | ❌     | ✅      | ✅    |
-| GET /api/dashboard/trends       | ❌     | ✅      | ✅    |
-| GET /api/users                  | ❌     | ❌      | ✅    |
-| POST /api/users                 | ❌     | ❌      | ✅    |
-| PUT/DELETE /api/users/:id       | ❌     | ❌      | ✅    |
-| PATCH /api/users/:id/status     | ❌     | ❌      | ✅    |
-
-**Role summary:**
-- **Viewer** — Read-only access to records and basic dashboard (summary + recent activity).
-- **Analyst** — Everything a Viewer can do, plus advanced analytics: category breakdowns and monthly trends.
-- **Admin** — Full access: manage records, manage users, and all analytics.
+| Endpoint | Viewer | Analyst | Admin |
+|---|---|---|---|
+| POST /api/auth/login | ✅ | ✅ | ✅ |
+| GET /api/auth/me | ✅ | ✅ | ✅ |
+| GET /api/records | ✅ | ✅ | ✅ |
+| GET /api/records/:id | ✅ | ✅ | ✅ |
+| POST /api/records | ❌ | ❌ | ✅ |
+| PUT /api/records/:id | ❌ | ❌ | ✅ |
+| DELETE /api/records/:id | ❌ | ❌ | ✅ |
+| GET /api/dashboard/summary | ✅ | ✅ | ✅ |
+| GET /api/dashboard/recent | ✅ | ✅ | ✅ |
+| GET /api/dashboard/categories | ❌ | ✅ | ✅ |
+| GET /api/dashboard/trends | ❌ | ✅ | ✅ |
+| /api/users (all operations) | ❌ | ❌ | ✅ |
 
 ---
 
@@ -210,108 +302,62 @@ The system defines three roles with progressively expanding access:
 
 ### Auth — `/api/auth`
 
-| Method | Endpoint       | Description                          | Auth Required |
-|--------|----------------|--------------------------------------|---------------|
-| POST   | /register      | Register a new user                  | No            |
-| POST   | /login         | Login and receive a JWT token        | No            |
-| GET    | /me            | Get the currently authenticated user | Yes           |
-| POST   | /logout        | Logout (client discards token)       | Yes           |
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| POST | /register | Register a new user | No |
+| POST | /login | Login, receive JWT token | No |
+| GET | /me | Get current user info | Yes |
+| POST | /logout | Logout | Yes |
 
 ---
 
-### Financial Records — `/api/records`
+### Records — `/api/records`
 
-| Method | Endpoint   | Description                       | Role Required |
-|--------|------------|-----------------------------------|---------------|
-| GET    | /          | List records with filters         | Any           |
-| POST   | /          | Create a new record               | Admin         |
-| GET    | /:id       | Get a single record by ID         | Any           |
-| PUT    | /:id       | Update a record                   | Admin         |
-| DELETE | /:id       | Soft delete a record              | Admin         |
+| Method | Endpoint | Description | Role |
+|---|---|---|---|
+| GET | / | List records with filters | Any |
+| POST | / | Create a new record | Admin |
+| GET | /:id | Get a single record | Any |
+| PUT | /:id | Update a record | Admin |
+| DELETE | /:id | Soft delete a record | Admin |
 
-#### Query Parameters for `GET /api/records`
+**Query parameters for `GET /api/records`:**
 
-| Param       | Type    | Description                                      |
-|-------------|---------|--------------------------------------------------|
-| `type`      | string  | Filter by `income` or `expense`                  |
-| `category`  | string  | Partial, case-insensitive category match         |
-| `startDate` | date    | Filter records on or after this date (YYYY-MM-DD)|
-| `endDate`   | date    | Filter records on or before this date            |
-| `search`    | string  | Full-text search in description and category     |
-| `page`      | integer | Page number (default: 1)                         |
-| `limit`     | integer | Results per page (default: 10, max: 100)         |
-| `sortBy`    | string  | Sort field: `date`, `amount`, or `category`      |
-| `sortOrder` | string  | `asc` or `desc` (default: `desc`)                |
-
-**Example:**
-```bash
-# Get all income records for March 2025, sorted by amount
-GET /api/records?type=income&startDate=2025-03-01&endDate=2025-03-31&sortBy=amount&sortOrder=desc
+```
+type        income | expense
+category    partial match, case-insensitive
+startDate   YYYY-MM-DD
+endDate     YYYY-MM-DD
+search      searches description + category fields
+page        default: 1
+limit       default: 10, max: 100
+sortBy      date | amount | category
+sortOrder   asc | desc
 ```
 
 ---
 
 ### Dashboard — `/api/dashboard`
 
-| Method | Endpoint      | Description                                   | Role Required    |
-|--------|---------------|-----------------------------------------------|------------------|
-| GET    | /summary      | Total income, expenses, and net balance       | Any              |
-| GET    | /recent       | Most recent N records                         | Any              |
-| GET    | /categories   | Income and expense totals grouped by category | Analyst + Admin  |
-| GET    | /trends       | Monthly income vs expense for last N months   | Analyst + Admin  |
-
-#### `GET /api/dashboard/summary` — Optional query params: `startDate`, `endDate`
-
-**Response:**
-```json
-{
-  "totalIncome": 34500,
-  "totalExpenses": 15100.5,
-  "netBalance": 19399.5,
-  "recordCount": 37,
-  "incomeCount": 9,
-  "expenseCount": 28
-}
-```
-
-#### `GET /api/dashboard/categories` — Optional query params: `type`, `startDate`, `endDate`
-
-**Response:**
-```json
-{
-  "data": [
-    { "category": "Salary",  "income": 30000, "expense": 0,    "count": 6 },
-    { "category": "Rent",    "income": 0,     "expense": 9000, "count": 6 },
-    { "category": "Freelance", "income": 2000, "expense": 0,   "count": 2 }
-  ]
-}
-```
-
-#### `GET /api/dashboard/trends` — Optional query param: `months` (default: 6, max: 24)
-
-**Response:**
-```json
-{
-  "months": 6,
-  "data": [
-    { "period": "2025-11", "income": 5000, "expense": 1937, "net": 3063 },
-    { "period": "2025-12", "income": 5000, "expense": 2330, "net": 2670 }
-  ]
-}
-```
+| Method | Endpoint | Description | Role |
+|---|---|---|---|
+| GET | /summary | Total income, expenses, net balance | Any |
+| GET | /recent | Last N records | Any |
+| GET | /categories | Breakdown by category | Analyst + Admin |
+| GET | /trends | Monthly income vs expense | Analyst + Admin |
 
 ---
 
-### User Management — `/api/users` *(Admin only)*
+### Users — `/api/users` *(Admin only)*
 
-| Method | Endpoint       | Description                          |
-|--------|----------------|--------------------------------------|
-| GET    | /              | List all users (paginated)           |
-| POST   | /              | Create a new user                    |
-| GET    | /:id           | Get a user by ID                     |
-| PUT    | /:id           | Update user name, email, or role     |
-| DELETE | /:id           | Delete a user                        |
-| PATCH  | /:id/status    | Toggle or set user active/inactive   |
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | / | List all users (paginated) |
+| POST | / | Create a user |
+| GET | /:id | Get a user by ID |
+| PUT | /:id | Update name, email, or role |
+| DELETE | /:id | Delete a user |
+| PATCH | /:id/status | Toggle active / inactive |
 
 ---
 
@@ -321,11 +367,11 @@ GET /api/records?type=income&startDate=2025-03-01&endDate=2025-03-31&sortBy=amou
 
 ```javascript
 {
-  name:      String,   // required
-  email:     String,   // required, unique, lowercase
-  password:  String,   // bcrypt hashed, never returned in responses
-  role:      String,   // enum: ['viewer', 'analyst', 'admin'], default: 'viewer'
-  isActive:  Boolean,  // default: true
+  name:      String,    // required
+  email:     String,    // unique, lowercase, validated format
+  password:  String,    // bcrypt hashed — stripped from every API response
+  role:      String,    // "viewer" | "analyst" | "admin"
+  isActive:  Boolean,   // inactive users are blocked at login
   createdAt: Date,
   updatedAt: Date
 }
@@ -335,13 +381,13 @@ GET /api/records?type=income&startDate=2025-03-01&endDate=2025-03-31&sortBy=amou
 
 ```javascript
 {
-  amount:      Number,   // required, must be > 0
-  type:        String,   // enum: ['income', 'expense'], required
-  category:    String,   // required, e.g. 'Salary', 'Rent', 'Freelance'
-  date:        Date,     // required
-  description: String,   // optional
-  createdBy:   ObjectId, // ref: User
-  isDeleted:   Boolean,  // default: false (soft delete)
+  amount:      Number,    // required, must be > 0
+  type:        String,    // "income" | "expense"
+  category:    String,    // "Salary", "Rent", "Freelance", etc.
+  date:        Date,      // required
+  description: String,    // optional notes
+  createdBy:   ObjectId,  // reference to the User who created it
+  isDeleted:   Boolean,   // soft delete flag — default false
   createdAt:   Date,
   updatedAt:   Date
 }
@@ -351,92 +397,92 @@ GET /api/records?type=income&startDate=2025-03-01&endDate=2025-03-31&sortBy=amou
 
 ## Access Control Design
 
-Role enforcement is implemented as a **middleware factory** (`requireRole`) that is applied at the route level:
+The system uses two composable middleware functions that chain cleanly at the route level:
+
+**`authenticate`** — verifies the JWT and loads the user into the request
 
 ```javascript
-// Restrict to admin only
-router.post('/', authenticate, requireRole('admin'), createRecord);
-
-// Restrict to analyst or admin
-router.get('/trends', authenticate, requireRole('analyst', 'admin'), getTrends);
-
-// All authenticated users
-router.get('/', authenticate, listRecords);
+const token = req.headers.authorization?.slice(7);
+const decoded = jwt.verify(token, process.env.JWT_SECRET);
+req.user = await User.findById(decoded.id);
 ```
 
-The `authenticate` middleware:
-1. Extracts the Bearer token from the `Authorization` header
-2. Verifies the JWT signature and expiry
-3. Looks up the user in the database
-4. Checks `isActive` status
-5. Attaches the user object to `req.user`
+**`requireRole`** — a factory function that returns a middleware for any role combination
 
-The `requireRole` factory then checks `req.user.role` against the allowed roles list.
+```javascript
+const requireRole = (...roles) => (req, res, next) => {
+  if (!roles.includes(req.user.role)) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  next();
+};
+```
+
+At the route level, it reads like documentation:
+
+```javascript
+router.get('/',       authenticate,                           listRecords);
+router.post('/',      authenticate, requireRole('admin'),     createRecord);
+router.get('/trends', authenticate, requireRole('analyst', 'admin'), getTrends);
+```
 
 ---
 
 ## Error Handling
 
-All errors return a consistent JSON structure:
+All errors return the same JSON structure — predictable for any client consuming the API:
 
 ```json
 {
-  "message": "Human-readable error description",
-  "errors": [ ... ]  // present on 400 validation errors only
+  "message": "Clear description of what went wrong",
+  "errors": []
 }
 ```
 
-| Status Code | Meaning                                    |
-|-------------|--------------------------------------------|
-| 400         | Validation failed — missing or invalid input |
-| 401         | Not authenticated — missing or invalid token |
-| 403         | Forbidden — authenticated but insufficient role |
-| 404         | Resource not found                          |
-| 500         | Internal server error                       |
+| Code | Meaning |
+|---|---|
+| 400 | Bad input — validation failed |
+| 401 | Not authenticated — missing or expired token |
+| 403 | Authenticated but not permitted — wrong role |
+| 404 | Resource does not exist |
+| 500 | Unexpected server error |
 
 ---
 
 ## Seed Data
 
-On first startup, the following is seeded automatically (idempotent — safe to restart):
+On first startup, the system seeds itself automatically. It is safe to restart — the seed function checks before inserting and never creates duplicates.
 
 **Users:**
-- `admin@findata.com` — role: admin
-- `analyst@findata.com` — role: analyst
-- `viewer@findata.com` — role: viewer
+- `admin@findata.com` — full admin access
+- `analyst@findata.com` — analytics and read access
+- `viewer@findata.com` — read-only access
 
-**Financial Records (37 entries across 6 months):**
+**37 financial records across 6 months:**
 - Monthly salary income ($5,000/month)
 - Freelance and investment income
-- Rent ($1,500/month)
-- Groceries, utilities, transport, entertainment, healthcare, savings
+- Rent, groceries, utilities, transport, entertainment, healthcare, savings
 
-This provides meaningful data for all dashboard analytics endpoints out of the box.
+This gives the dashboard endpoints real data to aggregate against from the first request.
 
 ---
 
-## Design Decisions
+## Design Decisions & Tradeoffs
 
-**1. Stateless JWT over sessions**
-Tokens are returned in the response body and sent via the `Authorization` header. This keeps the API stateless and client-agnostic — works equally well for web frontends, mobile apps, or CLI tools.
+**Stateless JWT over sessions**
+Tokens are returned in the response body and sent via the `Authorization` header. The server holds no session state — it scales horizontally without a shared store, and works identically whether the client is a browser, a mobile app, or a curl command.
 
-**2. Soft Delete**
-Records are never physically removed. Instead, `isDeleted: true` is set. A Mongoose query pre-hook automatically filters these out from all standard queries. This preserves the audit trail without additional effort from callers.
+**Soft delete over hard delete**
+Financial records are never physically removed. `isDeleted: true` is set on the document, and a Mongoose query pre-hook transparently filters deleted records from all standard queries. The audit trail is preserved by default. A future admin endpoint to view or restore deleted records would require zero schema changes.
 
-**3. Two-layer validation**
-Request bodies are validated with `express-validator` at the route level for clear user-facing error messages. Mongoose schema-level validators serve as a second safety net for data integrity at the persistence layer.
+**Two validation layers**
+`express-validator` at the route level gives users clear, field-specific feedback. Mongoose schema validators at the model level enforce data integrity regardless of how data enters the system. They solve different problems — one is UX, the other is reliability.
 
-**4. Single aggregation pass for categories**
-The `/dashboard/categories` endpoint groups by both category and type in a single MongoDB `$group` stage, then reshapes in JavaScript. This avoids two separate database queries.
+**Single aggregation pass for categories**
+The `/dashboard/categories` endpoint groups by both `category` and `type` in one MongoDB `$group` stage, then reshapes the result in memory. Two queries would have been simpler to write — but the single-pass approach is more efficient and demonstrates how to use aggregation pipelines effectively.
 
-**5. Configurable trend window**
-`/dashboard/trends` accepts a `?months=N` parameter (default: 6, max: 24). The time window is computed at query time from the current date, so no scheduled jobs or materialized views are needed.
+**Idempotent seeding**
+Restarting the server in any environment — local, staging, production — never produces duplicate users or phantom records. The seed checks for existing data before inserting anything.
 
-**6. Role distinction at the analytics layer**
-Viewers and Analysts both have read access to records. The meaningful distinction is at the dashboard level: Analysts get access to richer analytical endpoints (trends, category breakdowns) that require aggregation pipelines, while Viewers get simpler summary data.
-
-**7. Idempotent seeding**
-The seed function checks for existing records before inserting. Restarting the server never creates duplicate data.
-
-**8. Password never returned**
-The Mongoose schema uses a `toJSON` transform to strip the `password` field from all serialized user documents. There is no risk of accidentally leaking it in any response.
+**Password never returned**
+The `password` field is stripped at the Mongoose model level via a `toJSON` transform. It cannot appear in any response — not in `/me`, not in a user list, not in a `createdBy` population. Stripping it at the model level rather than in each controller means there is no room for a future developer to accidentally forget.
